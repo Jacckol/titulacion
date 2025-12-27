@@ -1,7 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'dart:convert';
 import 'package:http/http.dart' as http;
+
 import '../../providers/transactions_provider.dart';
 import '../../providers/auth_provider.dart';
 
@@ -18,9 +20,9 @@ class MiBilleteraEmpleadorScreen extends StatefulWidget {
       _MiBilleteraEmpleadorScreenState();
 }
 
-class _MiBilleteraEmpleadorScreenState
-    extends State<MiBilleteraEmpleadorScreen>
+class _MiBilleteraEmpleadorScreenState extends State<MiBilleteraEmpleadorScreen>
     with SingleTickerProviderStateMixin {
+  static const _apiBase = "http://10.0.2.2:4000";
 
   String? _miQrCuentaUrl;
 
@@ -31,58 +33,93 @@ class _MiBilleteraEmpleadorScreenState
   void initState() {
     super.initState();
 
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-    final transProv =
-        Provider.of<TransactionsProvider>(context, listen: false);
-
-    transProv.cargarTransacciones(auth.token!);
-    transProv.cargarPendientes(auth.token!);
-
-    if (auth.token != null) {
-      _cargarMiQr(auth.token!);
-    }
-
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 600),
+      duration: const Duration(milliseconds: 550),
     );
-
     _fade = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
-
     _controller.forward();
+
+    // Cargar data al inicio
+    WidgetsBinding.instance.addPostFrameCallback((_) => _cargarTodo());
   }
 
+  Future<void> _cargarTodo() async {
+    final auth = context.read<AuthProvider>();
+    final transProv = context.read<TransactionsProvider>();
+    final token = auth.token;
+
+    if (token == null || token.trim().isEmpty) return;
+
+    await transProv.cargarTransacciones(token);
+    await transProv.cargarPendientes(token);
+    await _cargarMiQr(token);
+  }
 
   Future<void> _cargarMiQr(String token) async {
     try {
       final resp = await http.get(
-        Uri.parse("http://10.0.2.2:4000/api/perfil/mine"),
+        Uri.parse("$_apiBase/api/perfil/mine"),
         headers: {
           "Authorization": "Bearer $token",
           "Content-Type": "application/json",
         },
       );
+
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body);
         if (data is Map && data["qrCuentaUrl"] != null) {
-          final q = data["qrCuentaUrl"].toString();
-          if (q.trim().isNotEmpty && mounted) {
+          final q = data["qrCuentaUrl"].toString().trim();
+          if (q.isNotEmpty && mounted) {
             setState(() => _miQrCuentaUrl = q);
           }
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      // Silencioso (si quieres, puedes mostrar SnackBar)
+    }
   }
 
-  void _verQrDialog(String url) {
-    final full = url.startsWith("http") ? url : "http://10.0.2.2:4000$url";
+  String _money(num v) => "\$${v.toStringAsFixed(2)}";
+
+  String _dateOnly(dynamic createdAt) {
+    final s = (createdAt ?? "").toString();
+    if (s.length >= 10) return s.substring(0, 10);
+    return s;
+  }
+
+  String _fullUrl(String url) {
+    final u = url.trim();
+    if (u.startsWith("http")) return u;
+    return "$_apiBase$u";
+  }
+
+  void _verImagenDialog({
+    required String title,
+    required String url,
+  }) {
+    final full = _fullUrl(url);
+
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text("Mi QR"),
+        title: Text(title),
         content: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.network(full, fit: BoxFit.contain),
+          borderRadius: BorderRadius.circular(14),
+          child: AspectRatio(
+            aspectRatio: 1,
+            child: Image.network(
+              full,
+              fit: BoxFit.contain,
+              loadingBuilder: (c, w, p) {
+                if (p == null) return w;
+                return const Center(child: CircularProgressIndicator());
+              },
+              errorBuilder: (_, __, ___) => const Center(
+                child: Text("No se pudo cargar la imagen"),
+              ),
+            ),
+          ),
         ),
         actions: [
           TextButton(
@@ -94,387 +131,527 @@ class _MiBilleteraEmpleadorScreenState
     );
   }
 
+  Future<void> _irConfigCuentaQR() async {
+    final auth = context.read<AuthProvider>();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CuentaBancariaEmpleadorScreen()),
+    );
+
+    if (!mounted) return;
+    if (auth.token != null) {
+      await _cargarMiQr(auth.token!);
+    }
+  }
+
+  Future<void> _pagarPendiente({
+    required int trabajadorId,
+    required int? trabajoId,
+    required double montoSugerido,
+  }) async {
+    final auth = context.read<AuthProvider>();
+    final transProv = context.read<TransactionsProvider>();
+
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PagoTransferenciaScreen(
+          trabajadorId: trabajadorId,
+          trabajoId: trabajoId,
+          montoSugerido: montoSugerido,
+        ),
+      ),
+    );
+
+    if (ok == true && auth.token != null) {
+      await transProv.cargarTransacciones(auth.token!);
+      await transProv.cargarPendientes(auth.token!);
+    }
+  }
+
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
 
+  // ========================= UI =========================
+
   @override
   Widget build(BuildContext context) {
-    final transProv = Provider.of<TransactionsProvider>(context);
+    final transProv = context.watch<TransactionsProvider>();
+
     final trans = transProv.transacciones;
-    final pendientes = transProv.pendientes
+    final gastos = trans.where((t) => t["tipo"] == "gasto").toList();
+
+    final pendientes = (transProv.pendientes)
         .where((t) => t["tipo"] == "gasto")
         .toList();
 
     double totalGastos = 0;
-    for (var t in trans) {
-      if (t["tipo"] == "gasto") {
-        totalGastos += (t["monto"] as num).toDouble();
-      }
+    for (final t in gastos) {
+      final monto = (t["monto"] as num?) ?? 0;
+      totalGastos += monto.toDouble();
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F1FF),
+      backgroundColor: const Color(0xFFF5F3FF),
       appBar: AppBar(
         title: const Text(
           "Mi Billetera",
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          style: TextStyle(fontWeight: FontWeight.w800, color: Colors.white),
         ),
-        backgroundColor: const Color(0xFF6D4AFF),
         elevation: 0,
+        backgroundColor: const Color(0xFF6D4AFF),
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF6D4AFF), Color(0xFF9D7BFF)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
       ),
       body: transProv.loading
           ? const Center(child: CircularProgressIndicator())
           : FadeTransition(
               opacity: _fade,
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _cardGlassResumen(totalGastos),
-                    const SizedBox(height: 25),
+              child: RefreshIndicator(
+                onRefresh: _cargarTodo,
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _ResumenCard(totalGastos: totalGastos),
+                            const SizedBox(height: 14),
 
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.account_balance),
-                        label: const Text("Configurar mi cuenta/QR"),
-                        onPressed: () {
-                          final auth = context.read<AuthProvider>();
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const CuentaBancariaEmpleadorScreen(),
+                            // Acciones cuenta / QR
+                            _ActionRow(
+                              onConfigCuenta: _irConfigCuentaQR,
+                              onVerQr: (_miQrCuentaUrl != null &&
+                                      _miQrCuentaUrl!.trim().isNotEmpty)
+                                  ? () => _verImagenDialog(
+                                        title: "Mi QR",
+                                        url: _miQrCuentaUrl!,
+                                      )
+                                  : null,
                             ),
-                          ).then((_) {
-                            if (auth.token != null) {
-                              _cargarMiQr(auth.token!);
-                            }
-                          });
-                        },
+
+                            const SizedBox(height: 16),
+
+                            // Pendientes (UNA sola sección)
+                            if (pendientes.isNotEmpty) ...[
+                              _SectionHeader(
+                                title: "Pagos pendientes",
+                                subtitle:
+                                    "Transacciones por completar (transferencia simulada).",
+                              ),
+                              const SizedBox(height: 10),
+                              _PendientesCard(
+                                pendientes: pendientes,
+                                onPagar: (trabajadorId, trabajoId, monto) =>
+                                    _pagarPendiente(
+                                  trabajadorId: trabajadorId,
+                                  trabajoId: trabajoId,
+                                  montoSugerido: monto,
+                                ),
+                                money: _money,
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+
+                            // Botones grandes
+                            _GradientButton(
+                              text: "Pagar con PayPal (Simulado)",
+                              icon: Icons.payment,
+                              colors: const [Color(0xFF6D4AFF), Color(0xFF9D7BFF)],
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const PagoPayPalScreen(
+                                      trabajadorId: 0,
+                                      trabajoId: 0,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            _GradientButton(
+                              text: "Ver Historial Completo",
+                              icon: Icons.history,
+                              colors: const [Colors.black87, Colors.black54],
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const HistorialTransaccionesScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 18),
+
+                            _SectionHeader(
+                              title: "Últimos gastos",
+                              subtitle: "Tus pagos realizados recientemente.",
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                        ),
                       ),
                     ),
 
-                    if (_miQrCuentaUrl != null && _miQrCuentaUrl!.trim().isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.visibility),
-                          label: const Text("Ver mi QR"),
-                          onPressed: () => _verQrDialog(_miQrCuentaUrl!),
-                        ),
-                      ),
-                    ],
-
-                    const SizedBox(height: 18),
-
-                    // ==================================================
-                    // 🔥 PAGOS PENDIENTES (TRANSFERENCIA SIMULADA)
-                    // ==================================================
-                    if (pendientes.isNotEmpty) ...[
-                      const Text(
-                        "Pagos pendientes",
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF2D2D2D),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      ...pendientes.take(5).map((t) {
-                        final monto = (t["monto"] as num).toDouble();
-                        final destinoId = t["destinoUserId"] as int?;
-                        final trabajoId = t["trabajoId"] as int?;
-                        return Card(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                    // Lista de gastos
+                    if (gastos.isEmpty)
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(16, 4, 16, 24),
+                          child: _EmptyState(
+                            title: "Sin gastos aún",
+                            subtitle: "Cuando realices pagos, se verán aquí.",
+                            icon: Icons.receipt_long,
                           ),
-                          child: ListTile(
-                            title: Text(t["descripcion"] ?? "Pago pendiente"),
-                            subtitle: Text(
-                              trabajoId != null
-                                  ? "Trabajo #$trabajoId"
-                                  : "Servicio",
-                            ),
-                            trailing: ElevatedButton(
-                              onPressed: destinoId == null
-                                  ? null
-                                  : () async {
-                                      final auth = context.read<AuthProvider>();
-                                      final ok = await Navigator.push<bool>(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => PagoTransferenciaScreen(
-                                            trabajadorId: destinoId,
-                                            trabajoId: trabajoId,
-                                            montoSugerido: monto,
-                                          ),
-                                        ),
-                                      );
-                                      if (ok == true && auth.token != null) {
-                                        await transProv.cargarTransacciones(auth.token!);
-                                        await transProv.cargarPendientes(auth.token!);
-                                      }
-                                    },
-                              child: Text("Pagar \$${monto.toStringAsFixed(2)}"),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                      const SizedBox(height: 20),
-                    ],
-
-                    // ======================
-                    // 🔥 PAGOS PENDIENTES
-                    // ======================
-                    if (pendientes.isNotEmpty) ...[
-                      const Text(
-                        "Pagos Pendientes",
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF2D2D2D),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.black12),
-                        ),
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: pendientes.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 18),
+                        sliver: SliverList.separated(
+                          itemCount: gastos.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 6),
                           itemBuilder: (_, i) {
-                            final p = pendientes[i];
-                            final monto = (p["monto"] as num).toDouble();
-                            final trabajoId = p["trabajoId"];
-                            final trabajadorId = p["destinoUserId"];
-                            return ListTile(
-                              title: Text(p["descripcion"] ?? "Pago pendiente"),
-                              subtitle: Text(
-                                trabajoId == null
-                                    ? "Servicio"
-                                    : "Trabajo #$trabajoId",
-                              ),
-                              trailing: ElevatedButton(
-                                onPressed: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => PagoTransferenciaScreen(
-                                        trabajadorId: trabajadorId,
-                                        trabajoId: trabajoId,
-                                        montoSugerido: monto,
-                                      ),
-                                    ),
-                                  ).then((ok) {
-                                    if (ok == true) {
-                                      final auth = context.read<AuthProvider>();
-                                      context
-                                          .read<TransactionsProvider>()
-                                          .cargarTransacciones(auth.token!);
-                                      context
-                                          .read<TransactionsProvider>()
-                                          .cargarPendientes(auth.token!);
-                                    }
-                                  });
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF6D4AFF),
-                                ),
-                                child: const Text(
-                                  "Pagar",
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                              ),
+                            final t = gastos[i];
+                            final desc = (t["descripcion"] ?? "Pago").toString();
+                            final monto = ((t["monto"] as num?) ?? 0).toDouble();
+                            final createdAt = t["createdAt"];
+                            final comprobanteUrl = t["comprobanteUrl"];
+
+                            return _TransaccionTile(
+                              descripcion: desc,
+                              fecha: _dateOnly(createdAt),
+                              monto: monto,
+                              onVerComprobante: (comprobanteUrl != null &&
+                                      comprobanteUrl.toString().trim().isNotEmpty)
+                                  ? () => _verImagenDialog(
+                                        title: "Comprobante de pago",
+                                        url: comprobanteUrl.toString(),
+                                      )
+                                  : null,
+                              money: _money,
                             );
                           },
                         ),
                       ),
-                      const SizedBox(height: 25),
-                    ],
-
-                    // 🔥 BOTÓN PAGO (FIX FINAL)
-                    _botonGradiente(
-                      text: "Pagar con PayPal (Simulado)",
-                      icon: Icons.payment,
-                      colors: const [
-                        Color(0xFF6D4AFF),
-                        Color(0xFF9D7BFF),
-                      ],
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const PagoPayPalScreen(
-                              trabajadorId: 0, // dummy
-                              trabajoId: 0,    // 🔥 FIX CLAVE
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-
-                    const SizedBox(height: 14),
-
-                    _botonGradiente(
-                      text: "Ver Historial Completo",
-                      icon: Icons.history,
-                      colors: const [Colors.black87, Colors.black54],
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                const HistorialTransaccionesScreen(),
-                          ),
-                        );
-                      },
-                    ),
-
-                    const SizedBox(height: 30),
-                    const Text(
-                      "Últimos Gastos",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF2D2D2D),
-                      ),
-                    ),
-
-                    const SizedBox(height: 15),
-
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: trans.length,
-                        itemBuilder: (_, i) {
-                          final t = trans[i];
-                          if (t["tipo"] != "gasto") return const SizedBox();
-                          final comprobanteUrl = t["comprobanteUrl"];
-                          return ListTile(
-                            title: Text(t["descripcion"] ?? "Pago"),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  t["createdAt"].toString().substring(0, 10),
-                                ),
-                                if (comprobanteUrl != null && comprobanteUrl.toString().trim().isNotEmpty)
-                                  TextButton(
-                                    onPressed: () {
-                                      final full = comprobanteUrl
-                                              .toString()
-                                              .startsWith("http")
-                                          ? comprobanteUrl.toString()
-                                          : "http://10.0.2.2:4000" +
-                                              comprobanteUrl.toString();
-                                      showDialog(
-                                        context: context,
-                                        builder: (_) => AlertDialog(
-                                          title: const Text("Comprobante de pago"),
-                                          content: ClipRRect(
-                                            borderRadius:
-                                                BorderRadius.circular(12),
-                                            child: Image.network(full,
-                                                fit: BoxFit.contain),
-                                          ),
-                                          actions: [
-                                            TextButton(
-                                              onPressed: () =>
-                                                  Navigator.pop(context),
-                                              child: const Text("Cerrar"),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    },
-                                    child:
-                                        const Text("Ver comprobante"),
-                                  ),
-                              ],
-                            ),
-                            trailing: Text(
-                              "-\$${(t["monto"] as num).toStringAsFixed(2)}",
-                              style: const TextStyle(
-                                color: Colors.red,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
                   ],
                 ),
               ),
             ),
     );
   }
+}
 
-  // ================= UI =================
+// ========================= Widgets UI =========================
 
-  Widget _cardGlassResumen(double total) {
+class _ResumenCard extends StatelessWidget {
+  final double totalGastos;
+
+  const _ResumenCard({required this.totalGastos});
+
+  String _money(num v) => "\$${v.toStringAsFixed(2)}";
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(25),
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(25),
-        gradient: LinearGradient(
-          colors: [
-            Colors.white.withOpacity(0.2),
-            Colors.white.withOpacity(0.05),
-          ],
+        borderRadius: BorderRadius.circular(22),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF6D4AFF), Color(0xFF9D7BFF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.12),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: Row(
         children: [
-          const Icon(Icons.wallet, size: 40, color: Colors.white),
-          const SizedBox(width: 25),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Total Gastado",
-                style: TextStyle(color: Colors.white70),
-              ),
-              Text(
-                "\$${total.toStringAsFixed(2)}",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 34,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Icon(Icons.wallet, size: 30, color: Colors.white),
           ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Total gastado",
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _money(totalGastos),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 30,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.trending_down, color: Colors.white70),
         ],
       ),
     );
   }
+}
 
-  Widget _botonGradiente({
-    required String text,
-    required IconData icon,
-    required List<Color> colors,
-    required VoidCallback onTap,
-  }) {
+class _ActionRow extends StatelessWidget {
+  final VoidCallback onConfigCuenta;
+  final VoidCallback? onVerQr;
+
+  const _ActionRow({
+    required this.onConfigCuenta,
+    required this.onVerQr,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.account_balance),
+            label: const Text("Cuenta / QR"),
+            onPressed: onConfigCuenta,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.qr_code_2),
+            label: const Text("Ver mi QR"),
+            onPressed: onVerQr,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+
+  const _SectionHeader({
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w900,
+            color: Color(0xFF1F1F1F),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          subtitle,
+          style: const TextStyle(
+            fontSize: 13,
+            color: Colors.black54,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PendientesCard extends StatefulWidget {
+  final List<dynamic> pendientes;
+  final void Function(int trabajadorId, int? trabajoId, double monto) onPagar;
+  final String Function(num v) money;
+
+  const _PendientesCard({
+    required this.pendientes,
+    required this.onPagar,
+    required this.money,
+  });
+
+  @override
+  State<_PendientesCard> createState() => _PendientesCardState();
+}
+
+class _PendientesCardState extends State<_PendientesCard> {
+  bool _verTodos = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _verTodos ? widget.pendientes : widget.pendientes.take(4).toList();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.black12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: items.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) {
+              final p = items[i] as Map;
+              final desc = (p["descripcion"] ?? "Pago pendiente").toString();
+              final monto = ((p["monto"] as num?) ?? 0).toDouble();
+              final trabajoId = p["trabajoId"] as int?;
+              final destinoId = p["destinoUserId"] as int?;
+
+              return ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6D4AFF).withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.pending_actions, color: Color(0xFF6D4AFF)),
+                ),
+                title: Text(
+                  desc,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  trabajoId != null ? "Trabajo #$trabajoId" : "Servicio",
+                  style: const TextStyle(color: Colors.black54),
+                ),
+                trailing: ElevatedButton(
+                  onPressed: (destinoId == null)
+                      ? null
+                      : () => widget.onPagar(destinoId, trabajoId, monto),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6D4AFF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    "Pagar ${widget.money(monto)}",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              );
+            },
+          ),
+
+          if (widget.pendientes.length > 4)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: TextButton.icon(
+                  onPressed: () => setState(() => _verTodos = !_verTodos),
+                  icon: Icon(_verTodos ? Icons.expand_less : Icons.expand_more),
+                  label: Text(_verTodos ? "Ver menos" : "Ver todos (${widget.pendientes.length})"),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GradientButton extends StatelessWidget {
+  final String text;
+  final IconData icon;
+  final List<Color> colors;
+  final VoidCallback onTap;
+
+  const _GradientButton({
+    required this.text,
+    required this.icon,
+    required this.colors,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(colors: colors),
         borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.10),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: ElevatedButton(
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.transparent,
           shadowColor: Colors.transparent,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -485,11 +662,127 @@ class _MiBilleteraEmpleadorScreenState
               text,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 17,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _TransaccionTile extends StatelessWidget {
+  final String descripcion;
+  final String fecha;
+  final double monto;
+  final VoidCallback? onVerComprobante;
+  final String Function(num v) money;
+
+  const _TransaccionTile({
+    required this.descripcion,
+    required this.fecha,
+    required this.monto,
+    required this.onVerComprobante,
+    required this.money,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: ListTile(
+          leading: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.red.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.payments, color: Colors.red),
+          ),
+          title: Text(
+            descripcion,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(fecha, style: const TextStyle(color: Colors.black54)),
+              if (onVerComprobante != null)
+                TextButton(
+                  onPressed: onVerComprobante,
+                  child: const Text("Ver comprobante"),
+                ),
+            ],
+          ),
+          trailing: Text(
+            "-${money(monto)}",
+            style: const TextStyle(
+              color: Colors.red,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+
+  const _EmptyState({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: Colors.black54),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

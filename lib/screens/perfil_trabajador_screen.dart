@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -7,8 +8,11 @@ import 'package:provider/provider.dart';
 import '../providers/trabajador_provider.dart';
 import '../providers/auth_provider.dart';
 import 'login_screen.dart';
+
 import 'package:pdf/widgets.dart' as pw;
+import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
+import 'package:intl/intl.dart';
 
 class PerfilTrabajadorScreen extends StatefulWidget {
   final int userId;
@@ -55,17 +59,20 @@ class _PerfilTrabajadorScreenState extends State<PerfilTrabajadorScreen> {
       final p = provider.perfil;
 
       if (p != null) {
-        _telefonoCtrl.text = p["telefono"] ?? widget.telefono;
-        _ubicacionCtrl.text = p["direccion"] ?? "";
-        _categoriaCtrl.text = p["categoria"] ?? "";
-        _experienciaCtrl.text = p["experiencia"]?.toString() ?? "0";
+        _telefonoCtrl.text = (p["telefono"] ?? widget.telefono).toString();
+        _ubicacionCtrl.text = (p["direccion"] ?? "").toString();
+        _categoriaCtrl.text = (p["categoria"] ?? "").toString();
+        _experienciaCtrl.text = (p["experiencia"] ?? 0).toString();
 
         if (p["habilidades"] is List) {
-          _habilidades = List<String>.from(p["habilidades"]);
+          _habilidades = List<String>.from(p["habilidades"])
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList();
         }
       }
 
-      setState(() {});
+      if (mounted) setState(() {});
     });
   }
 
@@ -114,7 +121,6 @@ class _PerfilTrabajadorScreenState extends State<PerfilTrabajadorScreen> {
 
     final provider = context.read<TrabajadorProvider>();
 
-    // 🔥 CAMPOS CORRECTOS (perfil simple)
     final ok = await provider.savePerfil(
       telefono: _telefonoCtrl.text.trim(),
       categoria: _categoriaCtrl.text.trim(),
@@ -126,6 +132,7 @@ class _PerfilTrabajadorScreenState extends State<PerfilTrabajadorScreen> {
     if (fotoFile != null) await provider.uploadFoto(fotoFile);
     if (cvFile != null) await provider.uploadCv(cvFile);
 
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(ok ? 'Perfil actualizado ✅' : 'Error guardando ❌'),
@@ -154,79 +161,357 @@ class _PerfilTrabajadorScreenState extends State<PerfilTrabajadorScreen> {
 
     if (confirmar == true) {
       await context.read<AuthProvider>().logout();
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (_) => const LoginScreen(rol: 'trabajador'),
-        ),
+        MaterialPageRoute(builder: (_) => const LoginScreen(rol: 'trabajador')),
       );
     }
   }
 
-  @override
+  // ==========================================================
+  // ✅ PDF CV con DISEÑO PRO (SIN withOpacity)
+  // ==========================================================
+  Future<void> _descargarCV(Map<String, dynamic> perfil) async {
+    final doc = pw.Document();
 
-Future<void> _descargarCV(Map<String, dynamic> perfil) async {
-  final doc = pw.Document();
+    final nombre = (perfil['nombre'] ?? widget.nombre ?? '').toString().trim();
+    final telefono =
+        (perfil['telefono'] ?? widget.telefono ?? '').toString().trim();
+    final categoria = (perfil['categoria'] ?? '').toString().trim();
+    final direccion = (perfil['direccion'] ?? '').toString().trim();
+    final experiencia = (perfil['experiencia'] ?? 0).toString().trim();
 
-  final nombre = (perfil['nombre'] ?? widget.nombre ?? '').toString();
-  final telefono = (perfil['telefono'] ?? widget.telefono ?? '').toString();
-  final categoria = (perfil['categoria'] ?? '').toString();
-  final direccion = (perfil['direccion'] ?? '').toString();
-  final experiencia = (perfil['experiencia'] ?? '').toString();
-  final habilidades = (perfil['habilidades'] is List)
-      ? List<String>.from(perfil['habilidades'])
-      : <String>[];
+    final habilidades = (perfil['habilidades'] is List)
+        ? List<String>.from(perfil['habilidades'])
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList()
+        : <String>[];
 
-  doc.addPage(
-    pw.Page(
-      build: (ctx) {
-        return pw.Column(
+    final fecha = DateFormat('dd/MM/yyyy').format(DateTime.now());
+
+    // Colores PDF (AARRGGBB)
+    final purple = PdfColor.fromInt(0xFF7C3AED);
+    final purpleDark = PdfColor.fromInt(0xFF5B21B6);
+    final text = PdfColor.fromInt(0xFF111827);
+    final muted = PdfColor.fromInt(0xFF6B7280);
+    final border = PdfColor.fromInt(0xFFE5E7EB);
+    final soft = PdfColor.fromInt(0xFFF3F4F6);
+
+    // Blancos con alpha (NO withOpacity)
+    final white18 = PdfColor.fromInt(0x2EFFFFFF); // ~18%
+    final white85 = PdfColor.fromInt(0xD9FFFFFF); // ~85%
+    final white92 = PdfColor.fromInt(0xEBFFFFFF); // ~92%
+    final white75 = PdfColor.fromInt(0xBFFFFFFF); // ~75%
+
+    pw.Widget tag(String t) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        margin: const pw.EdgeInsets.only(right: 6, bottom: 6),
+        decoration: pw.BoxDecoration(
+          color: soft,
+          borderRadius: pw.BorderRadius.circular(20),
+          border: pw.Border.all(color: border, width: 0.8),
+        ),
+        child: pw.Text(
+          t,
+          style: pw.TextStyle(fontSize: 10.5, color: text),
+        ),
+      );
+    }
+
+    pw.Widget sectionTitle(String t) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(top: 14, bottom: 8),
+        child: pw.Row(
+          children: [
+            pw.Container(
+              width: 6,
+              height: 14,
+              decoration: pw.BoxDecoration(
+                color: purple,
+                borderRadius: pw.BorderRadius.circular(3),
+              ),
+            ),
+            pw.SizedBox(width: 8),
+            pw.Text(
+              t,
+              style: pw.TextStyle(
+                fontSize: 12.5,
+                fontWeight: pw.FontWeight.bold,
+                color: text,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget infoRow(String k, String v) {
+      final vv = v.trim();
+      if (vv.isEmpty) return pw.SizedBox();
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 6),
+        child: pw.Row(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
-            pw.Text(nombre.isEmpty ? 'CV' : nombre,
-                style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
-            pw.SizedBox(height: 6),
-            if (telefono.isNotEmpty) pw.Text('Teléfono: $telefono'),
-            pw.SizedBox(height: 12),
-
-            pw.Text('Perfil', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-            pw.Divider(),
-            if (categoria.isNotEmpty) pw.Text('Categoría: $categoria'),
-            if (direccion.isNotEmpty) pw.Text('Dirección: $direccion'),
-            if (experiencia.isNotEmpty) pw.Text('Experiencia (años): $experiencia'),
-
-            pw.SizedBox(height: 12),
-            pw.Text('Habilidades', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-            pw.Divider(),
-            if (habilidades.isEmpty)
-              pw.Text('—')
-            else
-              pw.Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: habilidades
-                    .map((h) => pw.Container(
-                          padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: pw.BoxDecoration(
-                            border: pw.Border.all(width: 0.8),
-                            borderRadius: pw.BorderRadius.circular(8),
-                          ),
-                          child: pw.Text(h, style: const pw.TextStyle(fontSize: 10)),
-                        ))
-                    .toList(),
+            pw.SizedBox(
+              width: 92,
+              child: pw.Text(
+                k,
+                style: pw.TextStyle(
+                  fontSize: 10.5,
+                  color: muted,
+                  fontWeight: pw.FontWeight.bold,
+                ),
               ),
+            ),
+            pw.Expanded(
+              child: pw.Text(
+                vv,
+                style: pw.TextStyle(fontSize: 10.8, color: text),
+              ),
+            ),
           ],
-        );
-      },
-    ),
-  );
+        ),
+      );
+    }
 
-  await Printing.sharePdf(
-    bytes: await doc.save(),
-    filename: 'CV_${nombre.isEmpty ? 'trabajador' : nombre.replaceAll(' ', '_')}.pdf',
-  );
-}
+    doc.addPage(
+      pw.Page(
+        margin: const pw.EdgeInsets.all(22),
+        pageFormat: PdfPageFormat.a4,
+        build: (ctx) {
+          return pw.Container(
+            decoration: pw.BoxDecoration(
+              borderRadius: pw.BorderRadius.circular(18),
+              border: pw.Border.all(color: border, width: 1),
+            ),
+            child: pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                // LEFT SIDEBAR
+                pw.Container(
+                  width: 170,
+                  padding: const pw.EdgeInsets.all(16),
+                  decoration: pw.BoxDecoration(
+                    color: purpleDark,
+                    borderRadius: const pw.BorderRadius.only(
+                      topLeft: pw.Radius.circular(18),
+                      bottomLeft: pw.Radius.circular(18),
+                    ),
+                  ),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Container(
+                        width: 56,
+                        height: 56,
+                        decoration: pw.BoxDecoration(
+                          color: white18,
+                          shape: pw.BoxShape.circle,
+                          border: pw.Border.all(color: PdfColors.white, width: 1),
+                        ),
+                        alignment: pw.Alignment.center,
+                        child: pw.Text(
+                          nombre.isNotEmpty ? nombre[0].toUpperCase() : 'T',
+                          style: pw.TextStyle(
+                            color: PdfColors.white,
+                            fontSize: 24,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      pw.SizedBox(height: 12),
+                      pw.Text(
+                        nombre.isEmpty ? 'CV Trabajador' : nombre,
+                        style: pw.TextStyle(
+                          color: PdfColors.white,
+                          fontSize: 15,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                        maxLines: 2,
+                      ),
+                      pw.SizedBox(height: 6),
+                      pw.Text(
+                        categoria.isEmpty ? 'Trabajador' : categoria,
+                        style: pw.TextStyle(
+                          color: white85,
+                          fontSize: 10.5,
+                        ),
+                      ),
+                      pw.SizedBox(height: 14),
+                      pw.Container(height: 1, color: white18),
+                      pw.SizedBox(height: 14),
+                      pw.Text(
+                        "CONTACTO",
+                        style: pw.TextStyle(
+                          color: PdfColors.white,
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 11,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      pw.SizedBox(height: 10),
+                      if (telefono.isNotEmpty)
+                        pw.Text(
+                          "📞  $telefono",
+                          style: pw.TextStyle(
+                            color: white92,
+                            fontSize: 10.5,
+                          ),
+                        ),
+                      if (direccion.isNotEmpty) ...[
+                        pw.SizedBox(height: 8),
+                        pw.Text(
+                          "📍  $direccion",
+                          style: pw.TextStyle(
+                            color: white92,
+                            fontSize: 10.5,
+                          ),
+                          maxLines: 3,
+                        ),
+                      ],
+                      pw.Spacer(),
+                      pw.Container(height: 1, color: white18),
+                      pw.SizedBox(height: 10),
+                      pw.Text(
+                        "Generado: $fecha",
+                        style: pw.TextStyle(
+                          color: white75,
+                          fontSize: 9.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
 
+                // RIGHT CONTENT
+                pw.Expanded(
+                  child: pw.Padding(
+                    padding: const pw.EdgeInsets.all(16),
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Row(
+                          children: [
+                            pw.Expanded(
+                              child: pw.Text(
+                                "CURRÍCULUM VITAE",
+                                style: pw.TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: pw.FontWeight.bold,
+                                  color: text,
+                                  letterSpacing: 0.6,
+                                ),
+                              ),
+                            ),
+                            pw.Container(
+                              padding: const pw.EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: pw.BoxDecoration(
+                                color: soft,
+                                borderRadius: pw.BorderRadius.circular(20),
+                                border: pw.Border.all(color: border, width: 0.8),
+                              ),
+                              child: pw.Text(
+                                "ServX",
+                                style: pw.TextStyle(
+                                  fontSize: 10.5,
+                                  color: PdfColor.fromInt(0xFF5B21B6),
+                                  fontWeight: pw.FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        pw.SizedBox(height: 10),
+
+                        sectionTitle("Perfil"),
+                        pw.Container(
+                          padding: const pw.EdgeInsets.all(12),
+                          decoration: pw.BoxDecoration(
+                            color: PdfColors.white,
+                            borderRadius: pw.BorderRadius.circular(14),
+                            border: pw.Border.all(color: border, width: 1),
+                          ),
+                          child: pw.Column(
+                            crossAxisAlignment: pw.CrossAxisAlignment.start,
+                            children: [
+                              infoRow("Nombre", nombre.isEmpty ? "—" : nombre),
+                              infoRow("Categoría", categoria.isEmpty ? "—" : categoria),
+                              infoRow("Experiencia", "${experiencia.isEmpty ? "0" : experiencia} años"),
+                              infoRow("Ubicación", direccion.isEmpty ? "—" : direccion),
+                              infoRow("Teléfono", telefono.isEmpty ? "—" : telefono),
+                            ],
+                          ),
+                        ),
+
+                        sectionTitle("Habilidades"),
+                        pw.Container(
+                          padding: const pw.EdgeInsets.all(12),
+                          decoration: pw.BoxDecoration(
+                            color: PdfColors.white,
+                            borderRadius: pw.BorderRadius.circular(14),
+                            border: pw.Border.all(color: border, width: 1),
+                          ),
+                          child: habilidades.isEmpty
+                              ? pw.Text("—",
+                                  style: pw.TextStyle(color: muted, fontSize: 11))
+                              : pw.Wrap(
+                                  children: habilidades.map(tag).toList(),
+                                ),
+                        ),
+
+                        sectionTitle("Resumen"),
+                        pw.Container(
+                          padding: const pw.EdgeInsets.all(12),
+                          decoration: pw.BoxDecoration(
+                            color: soft,
+                            borderRadius: pw.BorderRadius.circular(14),
+                            border: pw.Border.all(color: border, width: 1),
+                          ),
+                          child: pw.Text(
+                            "Trabajador registrado en ServX. Perfil generado automáticamente con los datos proporcionados en la aplicación.",
+                            style: pw.TextStyle(color: muted, fontSize: 10.8),
+                          ),
+                        ),
+
+                        pw.Spacer(),
+                        pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text(
+                              "Documento generado desde la app",
+                              style: pw.TextStyle(color: muted, fontSize: 9.5),
+                            ),
+                            pw.Text(
+                              "© ServX",
+                              style: pw.TextStyle(color: muted, fontSize: 9.5),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    await Printing.sharePdf(
+      bytes: await doc.save(),
+      filename: 'CV_${(nombre.isEmpty ? 'trabajador' : nombre).replaceAll(' ', '_')}.pdf',
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final provider = context.watch<TrabajadorProvider>();
 
@@ -250,7 +535,6 @@ Future<void> _descargarCV(Map<String, dynamic> perfil) async {
           ),
         ],
       ),
-
       body: provider.loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
@@ -269,18 +553,17 @@ Future<void> _descargarCV(Map<String, dynamic> perfil) async {
                   ),
                   const SizedBox(height: 20),
 
-const SizedBox(height: 14),
-SizedBox(
-  width: double.infinity,
-  height: 46,
-  child: OutlinedButton.icon(
-    onPressed: provider.perfil == null ? null : () => _descargarCV(provider.perfil!),
-    icon: const Icon(Icons.picture_as_pdf),
-    label: const Text('Descargar CV'),
-  ),
-),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: OutlinedButton.icon(
+                      onPressed: provider.perfil == null ? null : () => _descargarCV(provider.perfil!),
+                      icon: const Icon(Icons.picture_as_pdf),
+                      label: const Text('Descargar CV'),
+                    ),
+                  ),
 
-
+                  const SizedBox(height: 18),
 
                   Row(
                     children: [
@@ -291,9 +574,7 @@ SizedBox(
                       Expanded(
                         child: _infoCard(
                           '💼',
-                          _experienciaCtrl.text.isNotEmpty
-                              ? _experienciaCtrl.text
-                              : '0',
+                          _experienciaCtrl.text.isNotEmpty ? _experienciaCtrl.text : '0',
                           'Años',
                         ),
                       ),
@@ -327,18 +608,14 @@ SizedBox(
             child: Text('Foto de Perfil', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
           const SizedBox(height: 12),
-
           CircleAvatar(
             radius: 55,
             backgroundColor: Colors.grey.shade300,
             child: Text(
-              widget.nombre.isNotEmpty
-                  ? widget.nombre[0].toUpperCase()
-                  : 'T',
+              widget.nombre.isNotEmpty ? widget.nombre[0].toUpperCase() : 'T',
               style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold),
             ),
           ),
-
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
@@ -376,10 +653,7 @@ SizedBox(
               children: [
                 Expanded(child: _campo('Categoría *', _categoriaCtrl)),
                 const SizedBox(width: 12),
-                SizedBox(
-                  width: 110,
-                  child: _campo('Años *', _experienciaCtrl),
-                ),
+                SizedBox(width: 110, child: _campo('Años *', _experienciaCtrl)),
               ],
             ),
             const SizedBox(height: 20),
@@ -407,9 +681,7 @@ SizedBox(
               Expanded(
                 child: TextField(
                   controller: _habilidadCtrl,
-                  decoration: const InputDecoration(
-                    hintText: "Agregar habilidad...",
-                  ),
+                  decoration: const InputDecoration(hintText: "Agregar habilidad..."),
                 ),
               ),
               const SizedBox(width: 10),
@@ -430,12 +702,12 @@ SizedBox(
           Wrap(
             spacing: 8,
             children: _habilidades
-                .map((h) => Chip(
-                      label: Text(h),
-                      onDeleted: () {
-                        setState(() => _habilidades.remove(h));
-                      },
-                    ))
+                .map(
+                  (h) => Chip(
+                    label: Text(h),
+                    onDeleted: () => setState(() => _habilidades.remove(h)),
+                  ),
+                )
                 .toList(),
           ),
         ],
