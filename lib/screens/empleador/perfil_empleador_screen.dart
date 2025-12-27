@@ -37,6 +37,10 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
   String _tipo = 'NATURAL'; // NATURAL | JURIDICA
   bool _cargando = true;
 
+  // 🎨 Paleta
+  static const Color _primary = Color(0xFF7C3AED);
+  static const Color _bg = Color(0xFFF6F7FB);
+
   @override
   void initState() {
     super.initState();
@@ -85,7 +89,7 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
         _direccionCtrl.text = (e['direccion'] ?? '').toString();
       }
     } catch (_) {
-      // Silencioso: no rompemos la UX
+      // Silencioso
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
@@ -117,7 +121,7 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
         'direccion': _direccionCtrl.text.trim(),
       };
 
-      // Limpieza para NATURAL (evita guardar ruc/empresa si no aplica)
+      // Limpieza para NATURAL
       if (_tipo == 'NATURAL') {
         payload['empresa'] = '';
         payload['ruc'] = '';
@@ -136,9 +140,7 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
       final ok = resp.statusCode == 200;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(ok ? 'Perfil actualizado ✅' : 'Error guardando ❌'),
-        ),
+        SnackBar(content: Text(ok ? 'Perfil actualizado ✅' : 'Error guardando ❌')),
       );
 
       if (ok) {
@@ -190,131 +192,211 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
 
     if (auth.token == null || auth.token!.isEmpty) {
       return Scaffold(
+        backgroundColor: _bg,
         body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Sesión no encontrada'),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen(rol: 'empleador')),
-                  );
-                },
-                child: const Text('Ir a Login'),
-              ),
-            ],
+          child: Container(
+            padding: const EdgeInsets.all(18),
+            decoration: _box(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.warning_amber_rounded, size: 38),
+                const SizedBox(height: 10),
+                const Text('Sesión no encontrada', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (_) => const LoginScreen(rol: 'empleador')),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Ir a Login', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
           ),
         ),
       );
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FAFB),
+      backgroundColor: _bg,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,
         title: const Text(
           'Portal Empleador',
           style: TextStyle(
-            color: Color(0xFF7C3AED),
+            color: _primary,
             fontWeight: FontWeight.bold,
           ),
         ),
         actions: [
-          TextButton.icon(
+          IconButton(
             onPressed: _logout,
             icon: const Icon(Icons.logout, color: Colors.black87),
-            label: const Text('Cerrar Sesión', style: TextStyle(color: Colors.black87)),
+            tooltip: 'Cerrar sesión',
           ),
         ],
       ),
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Mi Perfil',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Edita tus datos para que se vean correctamente en el módulo de empleador',
-                    style: TextStyle(color: Colors.black54),
-                  ),
-                  const SizedBox(height: 20),
+          : RefreshIndicator(
+              onRefresh: _cargar,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _headerCard(nombreHeader),
+                    const SizedBox(height: 14),
 
-                  Row(
-                    children: [
-                      Expanded(child: _infoCard('🏢', _tipo == 'JURIDICA' ? 'Empresa' : 'Natural', 'Tipo')),
-                      const SizedBox(width: 12),
-                      Expanded(child: _infoCard('📍', _direccionCtrl.text.isNotEmpty ? 'OK' : '--', 'Dirección')),
-                      const SizedBox(width: 12),
-                      Expanded(child: _infoCard('📞', _telefonoCtrl.text.isNotEmpty ? 'OK' : '--', 'Teléfono')),
-                    ],
-                  ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _infoCard(
+                            icon: Icons.badge_outlined,
+                            value: _tipo == 'JURIDICA' ? 'Empresa' : 'Natural',
+                            label: 'Tipo',
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _infoCard(
+                            icon: Icons.phone_outlined,
+                            value: _telefonoCtrl.text.isNotEmpty ? 'OK' : '--',
+                            label: 'Teléfono',
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _infoCard(
+                            icon: Icons.location_on_outlined,
+                            value: _direccionCtrl.text.isNotEmpty ? 'OK' : '--',
+                            label: 'Dirección',
+                          ),
+                        ),
+                      ],
+                    ),
 
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 16),
 
-                  _fotoCard(nombreHeader),
-                  const SizedBox(height: 20),
-                  _formCard(),
-                  const SizedBox(height: 30),
+                    _sectionTitle('Datos del perfil', 'Completa tu información para que se muestre bien'),
+                    const SizedBox(height: 10),
+                    _formCard(),
 
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      onPressed: _guardar,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF7C3AED),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                    const SizedBox(height: 18),
+
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton.icon(
+                        onPressed: _guardar,
+                        icon: const Icon(Icons.save_outlined, color: Colors.white),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _primary,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        label: const Text(
+                          'Guardar cambios',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
                         ),
                       ),
-                      child: const Text(
-                        'Guardar cambios',
-                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 22),
+                  ],
+                ),
               ),
             ),
     );
   }
 
-  Widget _fotoCard(String nombreHeader) {
+  // ===================== UI NUEVA (NO TOCA LÓGICA) =====================
+
+  Widget _headerCard(String nombreHeader) {
     final initial = nombreHeader.isNotEmpty ? nombreHeader[0].toUpperCase() : 'E';
+
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: _box(),
-      child: Column(
-        children: [
-          const Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Foto / Identidad', style: TextStyle(fontWeight: FontWeight.bold)),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF7C3AED), Color(0xFF9F67FF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
           ),
-          const SizedBox(height: 12),
-          CircleAvatar(
-            radius: 55,
-            backgroundColor: Colors.grey.shade300,
-            child: Text(
-              initial,
-              style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Color(0xFF7C3AED)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 30,
+              backgroundColor: Colors.white.withOpacity(0.25),
+              child: Text(
+                initial,
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Por ahora este módulo guarda datos básicos.\n(La verificación con archivos está en el perfil extendido)',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.black54, fontSize: 12),
-          ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    nombreHeader.isEmpty ? 'Empleador' : nombreHeader,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _tipo == 'JURIDICA' ? 'Perfil de Empresa (RUC)' : 'Perfil Persona Natural',
+                    style: TextStyle(color: Colors.white.withOpacity(0.9)),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.verified_user_outlined, color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title, String subtitle) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 3),
+          Text(subtitle, style: const TextStyle(color: Colors.black54, fontSize: 12)),
         ],
       ),
     );
@@ -329,26 +411,35 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Datos', style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 14),
+            const Text('Tipo de empleador', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
 
-            // Tipo
             Row(
               children: [
                 Expanded(
                   child: ChoiceChip(
                     label: const Text('Persona Natural'),
                     selected: _tipo == 'NATURAL',
+                    selectedColor: _primary.withOpacity(0.15),
+                    labelStyle: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: _tipo == 'NATURAL' ? _primary : Colors.black87,
+                    ),
                     onSelected: (v) {
                       if (v) setState(() => _tipo = 'NATURAL');
                     },
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: ChoiceChip(
                     label: const Text('Empresa (RUC)'),
                     selected: _tipo == 'JURIDICA',
+                    selectedColor: _primary.withOpacity(0.15),
+                    labelStyle: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: _tipo == 'JURIDICA' ? _primary : Colors.black87,
+                    ),
                     onSelected: (v) {
                       if (v) setState(() => _tipo = 'JURIDICA');
                     },
@@ -356,42 +447,59 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 14),
 
-            if (_tipo == 'NATURAL') ...[
-              _input(
-                label: 'Nombre completo',
-                ctrl: _nombreCtrl,
-                requiredField: true,
-              ),
-            ] else ...[
-              _input(
-                label: 'Empresa',
-                ctrl: _empresaCtrl,
-                requiredField: true,
-              ),
-              const SizedBox(height: 12),
-              _input(
-                label: 'RUC',
-                ctrl: _rucCtrl,
-                requiredField: true,
-              ),
-              const SizedBox(height: 12),
-              _input(
-                label: 'Responsable',
-                ctrl: _responsableCtrl,
-              ),
-            ],
+            const SizedBox(height: 16),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: _tipo == 'NATURAL'
+                  ? Column(
+                      key: const ValueKey('natural'),
+                      children: [
+                        _input(
+                          label: 'Nombre completo',
+                          ctrl: _nombreCtrl,
+                          icon: Icons.person_outline,
+                          requiredField: true,
+                        ),
+                      ],
+                    )
+                  : Column(
+                      key: const ValueKey('juridica'),
+                      children: [
+                        _input(
+                          label: 'Empresa',
+                          ctrl: _empresaCtrl,
+                          icon: Icons.apartment_outlined,
+                          requiredField: true,
+                        ),
+                        const SizedBox(height: 12),
+                        _input(
+                          label: 'RUC',
+                          ctrl: _rucCtrl,
+                          icon: Icons.numbers_outlined,
+                          requiredField: true,
+                        ),
+                        const SizedBox(height: 12),
+                        _input(
+                          label: 'Responsable',
+                          ctrl: _responsableCtrl,
+                          icon: Icons.manage_accounts_outlined,
+                        ),
+                      ],
+                    ),
+            ),
 
             const SizedBox(height: 12),
             _input(
               label: 'Teléfono',
               ctrl: _telefonoCtrl,
+              icon: Icons.phone_outlined,
             ),
             const SizedBox(height: 12),
             _input(
               label: 'Dirección',
               ctrl: _direccionCtrl,
+              icon: Icons.location_on_outlined,
               requiredField: true,
             ),
           ],
@@ -403,15 +511,26 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
   Widget _input({
     required String label,
     required TextEditingController ctrl,
+    required IconData icon,
     bool requiredField = false,
   }) {
     return TextFormField(
       controller: ctrl,
       decoration: InputDecoration(
         labelText: label,
+        prefixIcon: Icon(icon),
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: Colors.grey.shade300),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: _primary, width: 1.5),
+        ),
       ),
       validator: (v) {
         if (!requiredField) return null;
@@ -421,17 +540,36 @@ class _PerfilEmpleadorScreenState extends State<PerfilEmpleadorScreen> {
     );
   }
 
-  Widget _infoCard(String emoji, String value, String label) {
+  Widget _infoCard({
+    required IconData icon,
+    required String value,
+    required String label,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
       decoration: _box(),
-      child: Column(
+      child: Row(
         children: [
-          Text(emoji, style: const TextStyle(fontSize: 22)),
-          const SizedBox(height: 6),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(color: Colors.black54, fontSize: 12)),
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: _primary.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: _primary),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                Text(label, style: const TextStyle(color: Colors.black54, fontSize: 12)),
+              ],
+            ),
+          ),
         ],
       ),
     );
